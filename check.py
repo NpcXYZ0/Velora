@@ -7,12 +7,12 @@ import zipfile
 import shutil
 
 # Versão atual do aplicativo
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "0.0.1"
 
 def check_for_updates():
     try:
         # URL do arquivo JSON que contém a versão mais recente
-        update_url = ""
+        update_url = "https://github.com/NpcXYZ0/Velora/blob/main/version.json"
         response = requests.get(update_url)
         update_info = response.json()
 
