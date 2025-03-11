@@ -301,7 +301,7 @@ def abrir_janela_info():
     janela_info.geometry("300x200")
     janela_info.resizable(False, False)
     janela_info.minsize(400,125)
-    janela_info.iconbitmap("C:/Users/pokek/Downloads/CapDownloader/info.ico")
+    # janela_info.iconbitmap("info.ico")
 
     # Adiciona conteúdo à nova janela usando grid
     label = tk.Label(janela_info, text="Esta é uma janela de informações.")
@@ -313,7 +313,7 @@ def abrir_janela_info():
 root = ttk2.Window(themename="vapor")
 root.title("Velora")
 
-root.iconbitmap("C:/Users/pokek/Downloads/CapDownloader/icon.ico")
+root.iconbitmap(os.path.join(os.getcwd(), "icon.ico"))
 
 root.minsize(400,125)
 
@@ -323,9 +323,9 @@ root.resizable(False, False)
 root.columnconfigure(0, weight=1)
 root.columnconfigure(1, weight=1)
 
-image = Image.open("C:/Users/pokek/Downloads/CapDownloader/info.png")
-image = image.resize((32, 32), Image.Resampling.LANCZOS) 
-imagem_tk = ImageTk.PhotoImage(image)
+#image = Image.open("C:/Users/pokek/Downloads/CapDownloader/info.png")
+#image = image.resize((32, 32), Image.Resampling.LANCZOS) 
+#imagem_tk = ImageTk.PhotoImage(image)
 
 # Frame para os campos de entrada e botões
 button_frame = tk.Frame(root)
