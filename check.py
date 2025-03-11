@@ -12,8 +12,9 @@ CURRENT_VERSION = "0.0.1"
 def check_for_updates():
     try:
         # URL do arquivo JSON que contém a versão mais recente
-        update_url = "https://github.com/NpcXYZ0/Velora/blob/main/version.json"
+        update_url = "https://raw.githubusercontent.com/NpcXYZ0/Velora/refs/heads/main/version.json"
         response = requests.get(update_url)
+        print(response.text)
         update_info = response.json()
 
         latest_version = update_info["version"]
