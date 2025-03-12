@@ -19,9 +19,10 @@ from PIL import Image, ImageTk
 import zipfile
 import shutil
 import sys
+import queue
 
 # Versão atual do aplicativo
-CURRENT_VERSION = "1.0.4"  # Certifique-se de que esta versão está correta
+CURRENT_VERSION = "1.0.5"  # Certifique-se de que esta versão está correta
 
 # Atualiza o arquivo version.txt com a versão atual
 with open("version.txt", "w") as file:
@@ -29,6 +30,12 @@ with open("version.txt", "w") as file:
 
 # Contador global para rastrear a linha do grid
 download_counter = 0
+
+# Fila para gerenciar os downloads
+download_queue = queue.Queue()
+
+# Lock para sincronizar o acesso à fila e garantir que apenas um download seja processado por vez
+download_lock = threading.Lock()
 
 def is_valid_url(url):
     return validators.url(url)
@@ -55,18 +62,28 @@ def get_image_extension(img_url, content_type):
 def scroll_page(driver, scroll_pause_time=2, max_scrolls=10):
     """
     Rola a página para baixo para carregar todo o conteúdo.
+    Verifica se a URL mudou durante o scroll.
     """
+    original_url = driver.current_url  # Armazena a URL original
     last_height = driver.execute_script("return document.body.scrollHeight")
     scrolls = 0
 
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(scroll_pause_time)
+
+        # Verifica se a URL mudou
+        if driver.current_url != original_url:
+            print("URL mudou durante o scroll. Reiniciando...")
+            return False  # Indica que a URL mudou
+
         new_height = driver.execute_script("return document.body.scrollHeight")
         if new_height == last_height or scrolls >= max_scrolls:
             break
         last_height = new_height
         scrolls += 1
+
+    return True  # Indica que o scroll foi concluído sem mudanças na URL
 
 def extract_image_urls(driver):
     """
@@ -163,129 +180,168 @@ def download_images(url, folder_name, progress_bar, status_label, progress_frame
     service = Service(chrome_driver_path)
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
-    try:
-        print(f"Acessando a URL: {url}")
-        driver.get(url)
+    max_attempts = 3  # Número máximo de tentativas
+    attempt = 0
 
-        # Verifica se há um desafio do Cloudflare
-        if check_cloudflare(driver):
-            # Aguarda o usuário resolver o desafio manualmente
-            wait_for_cloudflare(driver)
+    while attempt < max_attempts:
+        try:
+            print(f"Acessando a URL: {url}")
+            driver.get(url)
 
-        print("Rolando a página para carregar o conteúdo...")
-        scroll_page(driver)
+            # Verifica se há um desafio do Cloudflare
+            if check_cloudflare(driver):
+                # Aguarda o usuário resolver o desafio manualmente
+                wait_for_cloudflare(driver)
 
-        # Aguarda mais tempo para garantir que as imagens sejam carregadas
-        time.sleep(5)
+            print("Rolando a página para carregar o conteúdo...")
+            scroll_success = scroll_page(driver)
 
-        # Extrai URLs das imagens
-        image_urls = extract_image_urls(driver)
+            if not scroll_success:
+                # Se a URL mudou, reinicia o processo
+                attempt += 1
+                print(f"Tentativa {attempt} de {max_attempts}")
+                driver.quit()  # Fecha o navegador atual
+                driver = webdriver.Chrome(service=service, options=chrome_options)  # Abre uma nova instância
+                continue  # Reinicia o loop
 
-        if not image_urls:
-            print("Nenhuma imagem encontrada na página.")
-            status_label.config(text="Nenhuma imagem encontrada na página.")
-            return
+            # Aguarda mais tempo para garantir que as imagens sejam carregadas
+            time.sleep(5)
 
-        # Cria a pasta com o nome escolhido pelo usuário
-        output_dir = os.path.join(os.getcwd(), folder_name)
-        os.makedirs(output_dir, exist_ok=True)
+            # Extrai URLs das imagens
+            image_urls = extract_image_urls(driver)
 
-        total_images = len(image_urls)
-        progress_bar["maximum"] = total_images
-        progress_bar["value"] = 0
+            if not image_urls:
+                print("Nenhuma imagem encontrada na página.")
+                status_label.config(text="Nenhuma imagem encontrada na página.")
+                return
 
-        img_elements = driver.find_elements(By.TAG_NAME, "img")
-        for index, img in enumerate(img_elements):
-            try:
-                img_src = img.get_attribute("src") or img.get_attribute("data-src")
-                if not img_src:
-                    continue
+            # Cria a pasta com o nome escolhido pelo usuário
+            output_dir = os.path.join(os.getcwd(), folder_name)
+            os.makedirs(output_dir, exist_ok=True)
 
-                if img_src.startswith("blob:"):
-                    # Baixa imagens blob
-                    download_blob_image(driver, img, output_dir, index)
-                else:
-                    # Baixa imagens normais
-                    if not bool(urlparse(img_src).netloc):
-                        img_src = urljoin(url, img_src)
+            total_images = len(image_urls)
+            progress_bar["maximum"] = total_images
+            progress_bar["value"] = 0
 
-                    print(f"Baixando imagem: {img_src}")
-                    status_label.config(text=f"Baixando {index + 1}/{total_images}: {os.path.basename(img_src)}")
-                    response = requests.get(img_src, stream=True)
+            img_elements = driver.find_elements(By.TAG_NAME, "img")
+            for index, img in enumerate(img_elements):
+                try:
+                    img_src = img.get_attribute("src") or img.get_attribute("data-src")
+                    if not img_src:
+                        continue
 
-                    if response.status_code == 200:
-                        # Obtém o tipo de conteúdo da imagem a partir do cabeçalho
-                        content_type = response.headers.get("Content-Type")
-
-                        # Determina a extensão da imagem
-                        extension = get_image_extension(img_src, content_type)
-
-                        # Define o nome do arquivo com a extensão correta
-                        base_name = os.path.basename(urlparse(img_src).path)
-                        if not base_name:
-                            base_name = f"image_{index + 1}"
-                        img_name = os.path.join(output_dir, f"{base_name}{extension}")
-
-                        # Verifica se o arquivo já existe e adiciona um sufixo único, se necessário
-                        counter = 1
-                        while os.path.exists(img_name):
-                            name, ext = os.path.splitext(base_name)
-                            img_name = os.path.join(output_dir, f"{name}_{counter}{ext}")
-                            counter += 1
-
-                        # Salva a imagem na pasta
-                        with open(img_name, 'wb') as img_file:
-                            for chunk in response.iter_content(1024):
-                                img_file.write(chunk)
-                        
-                        print(f"Imagem salva: {img_name}")
+                    if img_src.startswith("blob:"):
+                        # Baixa imagens blob
+                        download_blob_image(driver, img, output_dir, index)
                     else:
-                        print(f"Erro ao baixar {img_src}: Status {response.status_code}")
-            except Exception as e:
-                print(f"Erro ao processar a imagem {img_src}: {e}")
+                        # Baixa imagens normais
+                        if not bool(urlparse(img_src).netloc):
+                            img_src = urljoin(url, img_src)
+
+                        print(f"Baixando imagem: {img_src}")
+                        status_label.config(text=f"Baixando {index + 1}/{total_images}: {os.path.basename(img_src)}")
+                        response = requests.get(img_src, stream=True)
+
+                        if response.status_code == 200:
+                            # Obtém o tipo de conteúdo da imagem a partir do cabeçalho
+                            content_type = response.headers.get("Content-Type")
+
+                            # Determina a extensão da imagem
+                            extension = get_image_extension(img_src, content_type)
+
+                            # Define o nome do arquivo com a extensão correta
+                            base_name = os.path.basename(urlparse(img_src).path)
+                            if not base_name:
+                                base_name = f"image_{index + 1}"
+                            img_name = os.path.join(output_dir, f"{base_name}{extension}")
+
+                            # Verifica se o arquivo já existe e adiciona um sufixo único, se necessário
+                            counter = 1
+                            while os.path.exists(img_name):
+                                name, ext = os.path.splitext(base_name)
+                                img_name = os.path.join(output_dir, f"{name}_{counter}{ext}")
+                                counter += 1
+
+                            # Salva a imagem na pasta
+                            with open(img_name, 'wb') as img_file:
+                                for chunk in response.iter_content(1024):
+                                    img_file.write(chunk)
+                            
+                            print(f"Imagem salva: {img_name}")
+                        else:
+                            print(f"Erro ao baixar {img_src}: Status {response.status_code}")
+                except Exception as e:
+                    print(f"Erro ao processar a imagem {img_src}: {e}")
+                
+                # Atualiza a barra de progresso
+                progress_bar["value"] = index + 1
+                root.update_idletasks()
             
-            # Atualiza a barra de progresso
-            progress_bar["value"] = index + 1
-            root.update_idletasks()
-        
-        print(f"Imagens baixadas e salvas em {output_dir}")
-        status_label.config(text=f"Concluído! {total_images} imagens baixadas.")
+            print(f"Imagens baixadas e salvas em {output_dir}")
+            status_label.config(text=f"Concluído! {total_images} imagens baixadas.")
 
-        time.sleep(5)
+            time.sleep(5)
 
-        # Remove o frame de progresso após a conclusão
-        if progress_frame.winfo_exists():
-            progress_frame.destroy()
-    
-    except Exception as e:
-        print(f"Erro durante a execução: {e}")
-        status_label.config(text=f"Erro: {e}")
-        messagebox.showerror("Erro", f"Ocorreu um erro: {e}")
-    finally:
-        if driver:  # Fecha o navegador se o driver foi inicializado
-            driver.quit()
-            print("Navegador fechado.")
+            # Remove o frame de progresso após a conclusão
+            if progress_frame.winfo_exists():
+                progress_frame.destroy()
+            
+            break  # Sai do loop de tentativas se o processo for concluído com sucesso
+
+        except Exception as e:
+            print(f"Erro durante a execução: {e}")
+            status_label.config(text=f"Erro: {e}")
+            attempt += 1
+            print(f"Tentativa {attempt} de {max_attempts}")
+            if attempt >= max_attempts:
+                messagebox.showerror("Erro", f"Ocorreu um erro após {max_attempts} tentativas: {e}")
+            else:
+                driver.quit()  # Fecha o navegador atual
+                driver = webdriver.Chrome(service=service, options=chrome_options)  # Abre uma nova instância
+
+        finally:
+            if driver:  # Fecha o navegador se o driver foi inicializado
+                driver.quit()
+                print("Navegador fechado.")
+
+def process_download_queue():
+    """
+    Processa a fila de downloads, garantindo que apenas um download seja executado por vez.
+    """
+    while True:
+        # Obtém o próximo download da fila
+        task = download_queue.get()
+        if task is None:
+            break  # Encerra a thread se receber um sinal de parada
+
+        url, folder_name, progress_bar, status_label, progress_frame = task
+
+        # Usa o Lock para garantir que apenas um download seja processado por vez
+        with download_lock:
+            download_images(url, folder_name, progress_bar, status_label, progress_frame)
+
+        # Marca a tarefa como concluída
+        download_queue.task_done()
 
 def start_download():
     """
-    Inicia o processo de download das imagens em uma thread separada.
+    Adiciona o download à fila para ser processado.
     """
-    global download_counter  # Usa o contador global
+    global download_counter
 
     url = entry_url.get()
     folder_name = entry_folder.get()
-    
+
     if not url or not folder_name:
         messagebox.showwarning("Aviso", "Preencha todos os campos!")
         return
-    
+
     if not is_valid_url(url):
         messagebox.showwarning("Aviso", "A URL fornecida não é válida!")
         return
-    
+
     # Cria uma nova barra de progresso e label de status para esta thread
     progress_frame = tk.Frame(root)
-    
     progress_frame.grid(row=3 + download_counter, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 
     folder_name_label = tk.Label(progress_frame, text=f"Pasta: {folder_name}")
@@ -300,11 +356,12 @@ def start_download():
     # Incrementa o contador de downloads
     download_counter += 1
 
-    # Inicia o download em uma nova thread
-    threading.Thread(
-        target=download_images,
-        args=(url, folder_name, progress_bar, status_label, progress_frame)
-    ).start()
+    # Adiciona o download à fila
+    download_queue.put((url, folder_name, progress_bar, status_label, progress_frame))
+
+# Inicia a thread que processa a fila de downloads
+download_thread = threading.Thread(target=process_download_queue, daemon=True)
+download_thread.start()
 
 # Configuração da interface gráfica
 root = ttk2.Window(themename="vapor")
@@ -345,8 +402,6 @@ button_start.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 # Tornar os botões escaláveis dentro do frame
 button_frame.columnconfigure(0, weight=1)
 button_frame.columnconfigure(1, weight=1)
-
-# Verifica atualizações automaticamente ao iniciar
 
 # Inicia o loop da interface gráfica
 root.mainloop()
