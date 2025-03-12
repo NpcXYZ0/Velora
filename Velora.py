@@ -16,9 +16,22 @@ from urllib.parse import urljoin, urlparse
 from mimetypes import guess_extension
 import validators
 from PIL import Image, ImageTk
+import zipfile
+import shutil
+import sys
+
+# Versão atual do aplicativo
+CURRENT_VERSION = "1.0.4"  # Certifique-se de que esta versão está correta
+
+# Atualiza o arquivo version.txt com a versão atual
+with open("version.txt", "w") as file:
+    file.write(CURRENT_VERSION)
 
 # Contador global para rastrear a linha do grid
 download_counter = 0
+
+def is_valid_url(url):
+    return validators.url(url)
 
 def get_image_extension(img_url, content_type):
     """
@@ -240,7 +253,9 @@ def download_images(url, folder_name, progress_bar, status_label, progress_frame
 
         time.sleep(5)
 
-        progress_frame.destroy()
+        # Remove o frame de progresso após a conclusão
+        if progress_frame.winfo_exists():
+            progress_frame.destroy()
     
     except Exception as e:
         print(f"Erro durante a execução: {e}")
@@ -250,9 +265,6 @@ def download_images(url, folder_name, progress_bar, status_label, progress_frame
         if driver:  # Fecha o navegador se o driver foi inicializado
             driver.quit()
             print("Navegador fechado.")
-
-def is_valid_url(url):
-    return validators.url(url)
 
 def start_download():
     """
@@ -273,12 +285,13 @@ def start_download():
     
     # Cria uma nova barra de progresso e label de status para esta thread
     progress_frame = tk.Frame(root)
-    progress_frame.grid(row=3 + download_counter, column=0, columnspan=2, padx=10, pady=10, sticky="ew")  # Adiciona em uma nova linha
+    
+    progress_frame.grid(row=3 + download_counter, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 
     folder_name_label = tk.Label(progress_frame, text=f"Pasta: {folder_name}")
     folder_name_label.grid(row=0, column=0, pady=5, sticky="w")
 
-    progress_bar = ttk.Progressbar(progress_frame, orient="horizontal", length=300, mode="indeterminate")
+    progress_bar = ttk.Progressbar(progress_frame, orient="horizontal", length=300, mode="determinate")
     progress_bar.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 
     status_label = tk.Label(progress_frame, text="Aguardando início...")
@@ -294,22 +307,6 @@ def start_download():
     ).start()
 
 # Configuração da interface gráfica
-def abrir_janela_info():
-    # Cria uma nova janela
-    janela_info = tk.Toplevel()
-    janela_info.title("Informações")
-    janela_info.geometry("300x200")
-    janela_info.resizable(False, False)
-    janela_info.minsize(400,125)
-    # janela_info.iconbitmap("info.ico")
-
-    # Adiciona conteúdo à nova janela usando grid
-    label = tk.Label(janela_info, text="Esta é uma janela de informações.")
-    label.grid(row=0, column=0, padx=20, pady=20)
-
-    botao_fechar = tk.Button(janela_info, text="Fechar", command=janela_info.destroy)
-    botao_fechar.grid(row=1, column=0, pady=10)
-
 root = ttk2.Window(themename="vapor")
 root.title("Velora")
 
@@ -322,10 +319,6 @@ root.resizable(False, False)
 # Configuração do grid para tornar a interface escalável
 root.columnconfigure(0, weight=1)
 root.columnconfigure(1, weight=1)
-
-#image = Image.open("C:/Users/pokek/Downloads/CapDownloader/info.png")
-#image = image.resize((32, 32), Image.Resampling.LANCZOS) 
-#imagem_tk = ImageTk.PhotoImage(image)
 
 # Frame para os campos de entrada e botões
 button_frame = tk.Frame(root)
@@ -352,6 +345,8 @@ button_start.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 # Tornar os botões escaláveis dentro do frame
 button_frame.columnconfigure(0, weight=1)
 button_frame.columnconfigure(1, weight=1)
+
+# Verifica atualizações automaticamente ao iniciar
 
 # Inicia o loop da interface gráfica
 root.mainloop()
